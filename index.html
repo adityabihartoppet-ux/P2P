@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>P2P Pro Workspace</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --primary: #4285f4;
+            --success: #34a853;
+            --danger: #ea4335;
+            --bg: #f8f9fa;
+            --border: #dadce0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background-color: var(--bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+        }
+        .header { text-align: center; margin-bottom: 10px; }
+        .connection-panel {
+            background: white; padding: 15px; border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 15px;
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center;
+            width: 90%; max-width: 800px;
+        }
+        input, button { padding: 8px 12px; border: 1px solid var(--border); border-radius: 5px; font-size: 14px; }
+        button { background-color: var(--primary); color: white; border: none; cursor: pointer; font-weight: bold; }
+        .btn-success { background-color: var(--success); transition: background 0.2s;}
+        .btn-danger { background-color: var(--danger); transition: background 0.2s;}
+        
+        .main-container {
+            display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 900px;
+        }
+
+        /* 1. Canvas Viewport */
+        .canvas-container { background: white; padding: 10px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .toolbar { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; font-size: 14px;}
+        
+        #canvasViewport {
+            width: 100%;
+            height: 60vh;
+            min-height: 400px;
+            overflow: hidden;
+            position: relative;
+            border: 2px solid #ccc;
+            border-radius: 4px;
+            background-color: #e9ecef;
+            touch-action: none;
+            cursor: grab;
+        }
+        #drawCanvas {
+            position: absolute;
+            top: 0; left: 0;
+            background-color: #fff;
+            transform-origin: 0 0;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+
+        /* 2. Media Section */
+        .media-container { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        .media-buttons { display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
+        .video-grid { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 15px; }
+        video { width: 150px; border-radius: 8px; background-color: #000; transform: scaleX(-1); }
+
+        /* 3. File Share Section */
+        .file-container { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        #fileList { list-style: none; padding: 0; margin-top: 10px; max-height: 150px; overflow-y: auto; }
+        #fileList li { padding: 8px; border-bottom: 1px solid var(--border); font-size: 14px; }
+        #fileList a { color: var(--primary); text-decoration: none; font-weight: bold;}
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h3>🚀 Pro Workspace (Infinite Canvas)</h3>
+    </div>
+
+    <div class="connection-panel">
+        <div style="font-size: 14px;"><strong>ID:</strong> <span id="myId">Loading...</span></div>
+        <input type="text" id="peerIdInput" placeholder="Friend's ID">
+        <button onclick="connectToPeer()">Connect</button>
+        <div style="font-size: 14px;">👥 <span id="connectionCount">0</span></div>
+    </div>
+
+    <div class="main-container">
+        
+        <div class="canvas-container">
+            <div class="toolbar">
+                <label>✏️ <input type="color" id="colorPicker" value="#00e5ff"></label>
+                <label>📏 <input type="range" id="brushSize" min="1" max="20" value="5"></label>
+                <button onclick="clearCanvas()">🗑️ Clear</button>
+                <button onclick="resetZoom()">🔍 Reset View</button>
+                <span style="font-size: 12px; color: gray;">(2 fingers to zoom/pan)</span>
+            </div>
+            
+            <div id="canvasViewport">
+                <canvas id="drawCanvas" width="2000" height="2000"></canvas>
+            </div>
+        </div>
+
+        <div class="media-container">
+            <div class="media-buttons">
+                <button class="btn-success" id="btnAudio" onclick="toggleAudio()">🎙️ Start Audio</button>
+                <button class="btn-success" id="btnVideo" onclick="toggleVideo()">📹 Start Video</button>
+            </div>
+            <div class="video-grid" id="videoGrid">
+                <video id="localVideo" autoplay muted playsinline></video>
+            </div>
+        </div>
+
+        <div class="file-container">
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <strong>📁 Send File:</strong>
+                <input type="file" id="fileInput">
+                <button onclick="sendFile()">📤 Send</button>
+            </div>
+            <ul id="fileList"></ul>
+        </div>
+
+    </div>
+
+    <script>
+        // --- WEBRTC SETUP ---
+        let myPermanentId = localStorage.getItem('myP2P_ID');
+        if (!myPermanentId) {
+            myPermanentId = 'dev-' + Math.random().toString(36).substr(2, 8);
+            localStorage.setItem('myP2P_ID', myPermanentId);
+        }
+
+        const idDisplay = document.getElementById('myId');
+        idDisplay.innerText = myPermanentId + " ⏳";
+
+        const peer = new Peer(myPermanentId); 
+        let connections = []; 
+        
+        let localStream = new MediaStream();
+        let audioTrack = null;
+        let videoTrack = null;
+
+        peer.on('open', (id) => {
+            idDisplay.innerText = id + " ✅";
+            idDisplay.style.color = "green";
+        });
+
+        peer.on('error', (err) => {
+            if (err.type === 'unavailable-id') {
+                idDisplay.innerText = "❌ ID In-Use!";
+                alert("This page is already open in another tab!");
+            }
+        });
+
+        peer.on('connection', (conn) => setupConnection(conn));
+        peer.on('call', (call) => { 
+            call.answer(localStream); 
+            handleIncomingStream(call); 
+        });
+
+        function connectToPeer() {
+            const peerId = document.getElementById('peerIdInput').value;
+            if (!peerId) return;
+            setupConnection(peer.connect(peerId));
+            document.getElementById('peerIdInput').value = '';
+        }
+
+        function setupConnection(conn) {
+            conn.on('open', () => {
+                connections.push(conn);
+                document.getElementById('connectionCount').innerText = connections.length;
+            });
+            conn.on('data', (data) => {
+                if (data.type === 'draw') drawLineOnCanvas(data.x0, data.y0, data.x1, data.y1, data.color, data.size, false);
+                else if (data.type === 'clear') ctx.clearRect(0, 0, canvas.width, canvas.height);
+                else if (data.type === 'file') receiveFile(data);
+            });
+            conn.on('close', () => {
+                connections = connections.filter(c => c.peer !== conn.peer);
+                document.getElementById('connectionCount').innerText = connections.length;
+            });
+        }
+
+        function broadcast(data) { connections.forEach(conn => { if (conn.open) conn.send(data); }); }
+
+        // --- AUDIO/VIDEO TOGGLE LOGIC ---
+        
+        async function toggleAudio() {
+            const btn = document.getElementById('btnAudio');
+            
+            // Agar pehli baar on kar rahe hain
+            if (!audioTrack) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioTrack = stream.getAudioTracks()[0];
+                    localStream.addTrack(audioTrack);
+                    updatePeersWithNewStream();
+                    
+                    btn.innerText = "🔇 Mute Mic";
+                    btn.className = "btn-danger"; // Change color to red
+                } catch (err) { alert("Mic access denied."); }
+            } else {
+                // Agar pehle se on hai, toh Mute/Unmute karein
+                audioTrack.enabled = !audioTrack.enabled;
+                
+                if (audioTrack.enabled) {
+                    btn.innerText = "🔇 Mute Mic";
+                    btn.className = "btn-danger";
+                } else {
+                    btn.innerText = "🎙️ Unmute Mic";
+                    btn.className = "btn-success";
+                }
+            }
+        }
+
+        async function toggleVideo() {
+            const btn = document.getElementById('btnVideo');
+            
+            if (!videoTrack) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    videoTrack = stream.getVideoTracks()[0];
+                    localStream.addTrack(videoTrack);
+                    document.getElementById('localVideo').srcObject = localStream;
+                    updatePeersWithNewStream();
+                    
+                    btn.innerText = "🚫 Stop Video";
+                    btn.className = "btn-danger";
+                } catch (err) { alert("Camera access denied."); }
+            } else {
+                videoTrack.enabled = !videoTrack.enabled;
+                
+                if (videoTrack.enabled) {
+                    btn.innerText = "🚫 Stop Video";
+                    btn.className = "btn-danger";
+                } else {
+                    btn.innerText = "📹 Start Video";
+                    btn.className = "btn-success";
+                }
+            }
+        }
+
+        function updatePeersWithNewStream() {
+            connections.forEach(conn => {
+                const call = peer.call(conn.peer, localStream);
+                handleIncomingStream(call);
+            });
+        }
+
+        function handleIncomingStream(call) {
+            call.on('stream', (remoteStream) => {
+                let vid = document.getElementById(call.peer);
+                if (!vid) {
+                    vid = document.createElement('video');
+                    vid.id = call.peer;
+                    vid.autoplay = true; 
+                    vid.playsinline = true;
+                    document.getElementById('videoGrid').appendChild(vid);
+                }
+                vid.srcObject = remoteStream; 
+            });
+            call.on('close', () => {
+                let vid = document.getElementById(call.peer);
+                if (vid) vid.remove();
+            });
+        }
+
+        // --- MULTI-TOUCH, ZOOM & PAN LOGIC ---
+        const viewport = document.getElementById('canvasViewport');
+        const canvas = document.getElementById('drawCanvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const brushSize = document.getElementById('brushSize');
+
+        let isDrawing = false, isPanning = false;
+        let x = 0, y = 0;
+        let scale = 1, panX = 0, panY = 0;
+        let startDist = 0, startMid = {x: 0, y: 0}, lastPan = {x: 0, y: 0};
+
+        function updateTransform() { canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`; }
+        function resetZoom() { scale = 1; panX = 0; panY = 0; updateTransform(); }
+
+        function getPos(e) {
+            const rect = viewport.getBoundingClientRect();
+            let clientX = e.clientX, clientY = e.clientY;
+            if (e.touches && e.touches.length > 0) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; }
+            return { x: (clientX - rect.left - panX) / scale, y: (clientY - rect.top - panY) / scale };
+        }
+
+        function getDistance(touches) { return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY); }
+        function getMidpoint(touches) { return { x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2 }; }
+
+        viewport.addEventListener('mousedown', (e) => {
+            if(e.button === 1 || e.button === 2) return; 
+            isDrawing = true; const pos = getPos(e); x = pos.x; y = pos.y;
+        });
+
+        viewport.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const pos = getPos(e);
+            drawLineOnCanvas(x, y, pos.x, pos.y, colorPicker.value, brushSize.value, true);
+            x = pos.x; y = pos.y;
+        });
+
+        window.addEventListener('mouseup', () => isDrawing = false);
+
+        viewport.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                isDrawing = true; const pos = getPos(e); x = pos.x; y = pos.y;
+            } else if (e.touches.length === 2) {
+                isDrawing = false; isPanning = true;
+                startDist = getDistance(e.touches); startMid = getMidpoint(e.touches); lastPan = { x: panX, y: panY };
+            }
+        }, { passive: false });
+
+        viewport.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1 && isDrawing) {
+                const pos = getPos(e);
+                drawLineOnCanvas(x, y, pos.x, pos.y, colorPicker.value, brushSize.value, true);
+                x = pos.x; y = pos.y;
+            } else if (e.touches.length === 2 && isPanning) {
+                const currentDist = getDistance(e.touches); const currentMid = getMidpoint(e.touches);
+                const scaleChange = currentDist / startDist;
+                let newScale = scale * scaleChange;
+                newScale = Math.min(Math.max(0.2, newScale), 5); 
+
+                const rect = viewport.getBoundingClientRect();
+                const midXScreen = currentMid.x - rect.left, midYScreen = currentMid.y - rect.top;
+
+                panX = midXScreen - (midXScreen - lastPan.x) * (newScale / scale) + (currentMid.x - startMid.x);
+                panY = midYScreen - (midYScreen - lastPan.y) * (newScale / scale) + (currentMid.y - startMid.y);
+                
+                scale = newScale; startDist = currentDist; startMid = currentMid; lastPan = { x: panX, y: panY };
+                updateTransform();
+            }
+        }, { passive: false });
+
+        viewport.addEventListener('touchend', (e) => { e.preventDefault(); isDrawing = false; isPanning = false; }, { passive: false });
+
+        viewport.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            let newScale = scale * (1 + (e.deltaY > 0 ? -0.1 : 0.1));
+            newScale = Math.min(Math.max(0.2, newScale), 5);
+            const rect = viewport.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
+            panX = mouseX - (mouseX - panX) * (newScale / scale);
+            panY = mouseY - (mouseY - panY) * (newScale / scale);
+            scale = newScale; updateTransform();
+        }, { passive: false });
+
+        function drawLineOnCanvas(x0, y0, x1, y1, color, size, emit) {
+            ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+            ctx.strokeStyle = color; ctx.lineWidth = size; ctx.lineCap = 'round';
+            ctx.stroke(); ctx.closePath();
+            if (emit) broadcast({ type: 'draw', x0: x0, y0: y0, x1: x1, y1: y1, color: color, size: size });
+        }
+
+        function clearCanvas() { ctx.clearRect(0, 0, canvas.width, canvas.height); broadcast({ type: 'clear' }); }
+
+        // --- FIXED FILE SHARING LOGIC ---
+        function sendFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) return alert("Select a file first.");
+            if (connections.length === 0) return alert("Connect to a peer first.");
+
+            broadcast({ type: 'file', fileName: file.name, fileType: file.type, fileBlob: file });
+            
+            const url = URL.createObjectURL(file);
+            addFileToList(file.name, url, true);
+            fileInput.value = ''; 
+        }
+
+        function receiveFile(data) {
+            const blob = new Blob([data.fileBlob], { type: data.fileType });
+            const url = URL.createObjectURL(blob);
+            addFileToList(data.fileName, url, false);
+        }
+
+        function addFileToList(fileName, url, isMe) {
+            const list = document.getElementById('fileList');
+            const li = document.createElement('li');
+            li.innerHTML = `<a href="${url}" download="${fileName}">${isMe ? '✅ Sent' : '⬇️ Received'}: ${fileName}</a>`;
+            list.appendChild(li);
+        }
+    </script>
+</body>
+</html>
